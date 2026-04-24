@@ -14,51 +14,58 @@
  * limitations under the License.
  */
 
-import { Button } from '@material-ui/core';
+import { Button } from '@mui/material';
 import * as React from 'react';
 import { useState } from 'react';
-import { FlowElement } from 'react-flow-renderer';
 // import { ComponentSpec, PipelineSpec } from 'src/generated/pipeline_spec';
 import {
   KubernetesExecutorConfig,
   PvcMount,
 } from 'src/generated/platform_spec/kubernetes_platform';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import MD2Tabs from 'src/atoms/MD2Tabs';
 import { commonCss, padding } from 'src/Css';
 import { Apis } from 'src/lib/Apis';
 import { KeyValue } from 'src/lib/StaticGraphParser';
 import { errorToMessage } from 'src/lib/Utils';
-import { getTaskKeyFromNodeKey, NodeTypeNames } from 'src/lib/v2/StaticFlow';
+import { getTaskKeyFromNodeKey, NodeTypeNames, PipelineFlowElement } from 'src/lib/v2/StaticFlow';
 import {
   EXECUTION_KEY_CACHED_EXECUTION_ID,
   getArtifactName,
   getArtifactTypeName,
-  getArtifactTypes,
   getLinkedArtifactsByExecution,
   getStoreSessionInfoFromArtifact,
   filterEventWithOutputArtifact,
   KfpExecutionProperties,
   LinkedArtifact,
 } from 'src/mlmd/MlmdUtils';
+import { useArtifactTypes } from 'src/hooks/useArtifactTypes';
+import { queryKeys } from 'src/hooks/queryKeys';
 import WorkflowParser from 'src/lib/WorkflowParser';
 import { NodeMlmdInfo } from 'src/pages/RunDetailsV2';
 import { ArtifactType, Execution } from 'src/third_party/mlmd';
 import ArtifactPreview from 'src/components/ArtifactPreview';
 import Banner from 'src/components/Banner';
 import DetailsTable from 'src/components/DetailsTable';
-import { FlowElementDataBase } from 'src/components/graph/Constants';
 import LogViewer from 'src/components/LogViewer';
 import { getResourceStateText, ResourceType } from 'src/components/ResourceInfo';
 import { MetricsVisualizations } from 'src/components/viewers/MetricsVisualizations';
 import { ArtifactTitle } from 'src/components/tabs/ArtifactTitle';
-import InputOutputTab, {
+import RuntimeInputOutputTab, {
   getArtifactParamList,
   ParamList,
 } from 'src/components/tabs/InputOutputTab';
 import { convertYamlToPlatformSpec, convertYamlToV2PipelineSpec } from 'src/lib/v2/WorkflowUtils';
 import { PlatformDeploymentConfig } from 'src/generated/pipeline_spec/pipeline_spec';
 import { getComponentSpec } from 'src/lib/v2/NodeUtils';
+import {
+  usePodStatus,
+  ERROR_REASONS,
+  PodStatusInfo,
+  ContainerStatusInfo,
+  PodEventInfo,
+  PodStateSnapshot,
+} from 'src/hooks/usePodStatus';
 
 export const LOGS_DETAILS = 'logs_details';
 export const LOGS_BANNER_MESSAGE = 'logs_banner_message';
@@ -86,7 +93,7 @@ interface RuntimeNodeDetailsV2Props {
   onLayerChange: (layers: string[]) => void;
   pipelineJobString?: string;
   runId?: string;
-  element?: FlowElement<FlowElementDataBase> | null;
+  element?: PipelineFlowElement | null;
   elementMlmdInfo?: NodeMlmdInfo | null;
   namespace: string | undefined;
 }
@@ -142,7 +149,7 @@ export function RuntimeNodeDetailsV2({
 interface TaskNodeDetailProps {
   pipelineJobString?: string;
   runId?: string;
-  element?: FlowElement<FlowElementDataBase> | null;
+  element?: PipelineFlowElement | null;
   execution?: Execution;
   layers: string[];
   namespace: string | undefined;
@@ -156,36 +163,54 @@ function TaskNodeDetail({
   layers,
   namespace,
 }: TaskNodeDetailProps) {
-  const { data: logsInfo } = useQuery<Map<string, string>, Error>(
-    ['execution_logs', { executionId: execution?.getId(), namespace }],
-    async () => {
+  const {
+    data: logsInfo,
+    isError: logsQueryFailed,
+    error: logsQueryError,
+  } = useQuery<Map<string, string>, Error>({
+    queryKey: queryKeys.executionLogs(execution?.getId(), namespace),
+    queryFn: async () => {
       if (!execution) {
         throw new Error('No execution is found.');
       }
       return await getLogsInfo(execution, runId, namespace);
     },
-    { enabled: !!execution },
+    enabled: !!execution,
+  });
+
+  // Fetch pod status and events
+  // Enabled even without execution to catch early failures like ImagePullBackOff
+  const { data: podStatusInfo, error: podStatusError } = usePodStatus(
+    execution,
+    namespace,
+    runId,
+    element,
+    layers,
+    pipelineJobString,
   );
 
   const logsDetails = logsInfo?.get(LOGS_DETAILS);
-  const logsBannerMessage = logsInfo?.get(LOGS_BANNER_MESSAGE);
-  const logsBannerAdditionalInfo = logsInfo?.get(LOGS_BANNER_ADDITIONAL_INFO);
+  const logsBannerMessage =
+    logsInfo?.get(LOGS_BANNER_MESSAGE) ||
+    (logsQueryFailed ? 'Failed to retrieve pod logs.' : undefined);
+  const logsBannerAdditionalInfo =
+    logsInfo?.get(LOGS_BANNER_ADDITIONAL_INFO) || logsQueryError?.message;
 
   const [selectedTab, setSelectedTab] = useState(0);
 
   return (
     <div className={commonCss.page}>
       <MD2Tabs
-        tabs={['Input/Output', 'Task Details', 'Logs']}
+        tabs={['Input/Output', 'Task Details', 'Logs', 'Pod Status']}
         selectedTab={selectedTab}
-        onSwitch={tab => setSelectedTab(tab)}
+        onSwitch={(tab) => setSelectedTab(tab)}
       />
       <div className={commonCss.page}>
         {/* Input/Output tab */}
         {selectedTab === 0 &&
           (() => {
             if (execution) {
-              return <InputOutputTab execution={execution} namespace={namespace} />;
+              return <RuntimeInputOutputTab execution={execution} namespace={namespace} />;
             }
             return NODE_STATE_UNAVAILABLE;
           })()}
@@ -204,9 +229,7 @@ function TaskNodeDetail({
         {selectedTab === 2 && (
           <div className={commonCss.page}>
             {logsBannerMessage && (
-              <React.Fragment>
-                <Banner message={logsBannerMessage} additionalInfo={logsBannerAdditionalInfo} />
-              </React.Fragment>
+              <Banner message={logsBannerMessage} additionalInfo={logsBannerAdditionalInfo} />
             )}
             {!logsBannerMessage && (
               <div className={commonCss.pageOverflowHidden} data-testid={'logs-view-window'}>
@@ -215,13 +238,26 @@ function TaskNodeDetail({
             )}
           </div>
         )}
+        {/* Pod Status tab */}
+        {selectedTab === 3 && (
+          <div className={padding(20)}>
+            <PodStatusTab
+              podStatus={podStatusInfo?.status || null}
+              podEvents={podStatusInfo?.events || []}
+              stateHistory={podStatusInfo?.stateHistory || []}
+              error={podStatusError}
+              cached={podStatusInfo?.cached}
+              cachedAt={podStatusInfo?.cachedAt}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 function getTaskDetailsFields(
-  element?: FlowElement<FlowElementDataBase> | null,
+  element?: PipelineFlowElement | null,
   execution?: Execution,
 ): Array<KeyValue<string>> {
   const details: Array<KeyValue<string>> = [];
@@ -231,10 +267,7 @@ function getTaskDetailsFields(
       // Static execution info.
       details.push([
         'Task name',
-        execution
-          .getCustomPropertiesMap()
-          .get('display_name')
-          ?.getStringValue() || '-',
+        execution.getCustomPropertiesMap().get('display_name')?.getStringValue() || '-',
       ]);
 
       // Runtime execution info.
@@ -269,7 +302,7 @@ function getTaskDetailsFields(
 function getNodeVolumeMounts(
   layers: string[],
   pipelineJobString?: string,
-  element?: FlowElement<FlowElementDataBase> | null,
+  element?: PipelineFlowElement | null,
 ): Array<KeyValue<string>> {
   if (!pipelineJobString || !element) {
     return [];
@@ -295,11 +328,474 @@ function getNodeVolumeMounts(
   let volumeMounts: Array<KeyValue<string>> = [];
   if (matchedExecutorObj) {
     const executor = KubernetesExecutorConfig.fromJSON(matchedExecutorObj[1]);
-    const pvcMounts = Object.values(executor.pvcMount).map(pvcm => PvcMount.fromJSON(pvcm));
-    volumeMounts = pvcMounts.map(pvcm => [pvcm.mountPath, pvcm.taskOutputParameter?.producerTask]);
+    const pvcMounts = Object.values(executor.pvcMount).map((pvcm) => PvcMount.fromJSON(pvcm));
+    volumeMounts = pvcMounts.map((pvcm) => [
+      pvcm.mountPath,
+      pvcm.taskOutputParameter?.producerTask,
+    ]);
   }
 
   return volumeMounts;
+}
+
+// Component to display pod status, lifecycle history, and events
+interface PodStatusTabProps {
+  podStatus: PodStatusInfo | null;
+  podEvents: PodEventInfo[];
+  stateHistory: PodStateSnapshot[];
+  error?: Error | null;
+  cached?: boolean;
+  cachedAt?: number;
+}
+
+// Color helpers
+const getPhaseColor = (phase?: string) => {
+  switch (phase) {
+    case 'Running':
+      return '#4caf50';
+    case 'Succeeded':
+      return '#2196f3';
+    case 'Failed':
+      return '#f44336';
+    case 'Pending':
+      return '#ff9800';
+    default:
+      return '#9e9e9e';
+  }
+};
+
+const getPhaseBackgroundColor = (phase?: string) => {
+  switch (phase) {
+    case 'Failed':
+      return '#ffebee';
+    case 'Running':
+      return '#e8f5e9';
+    case 'Succeeded':
+      return '#e3f2fd';
+    case 'Pending':
+      return '#fff3e0';
+    default:
+      return '#fafafa';
+  }
+};
+
+const getContainerStatusColor = (cs: ContainerStatusInfo) => {
+  if (cs.reason && ERROR_REASONS.includes(cs.reason)) return '#f44336';
+  if (cs.state === 'terminated' && cs.exitCode !== undefined && cs.exitCode !== 0) return '#f44336';
+  if (cs.state === 'terminated' && cs.exitCode === 0) return '#2196f3';
+  if (cs.state === 'terminated') return '#e57373';
+  if (cs.state === 'running' && cs.ready) return '#4caf50';
+  if (cs.state === 'waiting') return '#ff9800';
+  return '#9e9e9e';
+};
+
+const getContainerBackgroundColor = (cs: ContainerStatusInfo) => {
+  if (cs.reason && ERROR_REASONS.includes(cs.reason)) return '#ffebee';
+  if (cs.state === 'terminated' && cs.exitCode !== undefined && cs.exitCode !== 0) return '#ffebee';
+  return '#fff';
+};
+
+function PodStatusTab({
+  podStatus,
+  podEvents,
+  stateHistory,
+  error,
+  cached,
+  cachedAt,
+}: PodStatusTabProps) {
+  if (error) {
+    return (
+      <Banner message='Failed to retrieve pod status' additionalInfo={error.message} mode='error' />
+    );
+  }
+
+  const formatTime = (timestamp?: number) => {
+    if (!timestamp) return '';
+    return new Date(timestamp).toLocaleString();
+  };
+
+  // Summarize a state snapshot into a short label
+  const getStateLabel = (snapshot: PodStateSnapshot): string => {
+    const phase = snapshot.phase || 'Unknown';
+    if (snapshot.reason) {
+      return `${phase} (${snapshot.reason})`;
+    }
+    return phase;
+  };
+
+  // Get container summary for a snapshot (only main container, filter out Argo-internal init/wait)
+  const getContainerSummary = (snapshot: PodStateSnapshot): string[] => {
+    if (!snapshot.containerStatuses) return [];
+    return snapshot.containerStatuses
+      .filter((cs) => cs.name === 'main')
+      .map((cs) => {
+        const parts: string[] = [];
+        if (cs.state) parts.push(cs.state);
+        if (cs.reason) parts.push(`(${cs.reason})`);
+        if (cs.exitCode !== undefined) {
+          parts.push(cs.exitCode === 0 ? 'exit:0' : `exit:${cs.exitCode}`);
+        }
+        return parts.join(' ');
+      });
+  };
+
+  return (
+    <div>
+      {/* Cached Data Indicator */}
+      {cached && (
+        <div
+          style={{
+            backgroundColor: '#e3f2fd',
+            border: '1px solid #90caf9',
+            borderRadius: '4px',
+            padding: '12px 16px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          <div>
+            <strong style={{ color: '#1565c0' }}>Cached Data</strong>
+            <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
+              Pod status and events cached from a previous query.
+              {cachedAt && ` Last updated: ${formatTime(cachedAt)}`}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Current Pod Status */}
+      <div style={{ marginBottom: '24px' }}>
+        <h3 style={{ marginBottom: '12px', fontSize: '16px', fontWeight: 500 }}>Current Status</h3>
+        {podStatus ? (
+          <div
+            style={{
+              border: `1px solid ${podStatus.phase === 'Failed' ? '#f44336' : '#e0e0e0'}`,
+              borderRadius: '4px',
+              padding: '16px',
+              backgroundColor: getPhaseBackgroundColor(podStatus.phase),
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+              <span
+                style={{
+                  display: 'inline-block',
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  backgroundColor: getPhaseColor(podStatus.phase),
+                  marginRight: '8px',
+                }}
+              />
+              <strong
+                style={{
+                  fontSize: '14px',
+                  color: podStatus.phase === 'Failed' ? '#c62828' : 'inherit',
+                }}
+              >
+                Phase: {podStatus.phase || 'Unknown'}
+              </strong>
+            </div>
+
+            {podStatus.phase === 'Failed' && podStatus.reason && (
+              <div
+                style={{
+                  backgroundColor: '#f44336',
+                  color: '#fff',
+                  padding: '12px',
+                  borderRadius: '4px',
+                  marginBottom: '12px',
+                }}
+              >
+                <strong>Error: {podStatus.reason}</strong>
+                {podStatus.message && (
+                  <div style={{ marginTop: '4px', fontSize: '13px' }}>{podStatus.message}</div>
+                )}
+              </div>
+            )}
+
+            {podStatus.reason && podStatus.phase !== 'Failed' && (
+              <div style={{ marginBottom: '8px' }}>
+                <strong>Reason:</strong> {podStatus.reason}
+              </div>
+            )}
+            {podStatus.message && podStatus.phase !== 'Failed' && (
+              <div style={{ marginBottom: '8px' }}>
+                <strong>Message:</strong> {podStatus.message}
+              </div>
+            )}
+            {podStatus.nodeName && (
+              <div style={{ marginBottom: '8px' }}>
+                <strong>Node:</strong> {podStatus.nodeName}
+              </div>
+            )}
+            {podStatus.podIP && (
+              <div style={{ marginBottom: '8px' }}>
+                <strong>Pod IP:</strong> {podStatus.podIP}
+              </div>
+            )}
+
+            {/* Container Status - show only main container (filter out Argo-internal init/wait) */}
+            {podStatus.containerStatuses &&
+              podStatus.containerStatuses.filter((cs) => cs.name === 'main').length > 0 && (
+                <div style={{ marginTop: '16px' }}>
+                  <strong>Container:</strong>
+                  {podStatus.containerStatuses
+                    .filter((cs) => cs.name === 'main')
+                    .map((cs, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          marginTop: '8px',
+                          padding: '12px',
+                          backgroundColor: getContainerBackgroundColor(cs),
+                          border: `1px solid ${cs.reason && ERROR_REASONS.includes(cs.reason) ? '#f44336' : '#e0e0e0'}`,
+                          borderRadius: '4px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              width: '8px',
+                              height: '8px',
+                              borderRadius: '50%',
+                              backgroundColor: getContainerStatusColor(cs),
+                              marginRight: '8px',
+                            }}
+                          />
+                          <strong>{cs.name}</strong>
+                          <span style={{ marginLeft: '8px', color: '#666' }}>
+                            {cs.state || 'unknown'}
+                          </span>
+                          <span
+                            style={{
+                              marginLeft: '4px',
+                              color:
+                                cs.state === 'terminated'
+                                  ? cs.exitCode === 0
+                                    ? '#2196f3'
+                                    : '#c62828'
+                                  : '#666',
+                              fontWeight:
+                                cs.state === 'terminated' && cs.exitCode !== 0 ? 500 : 'normal',
+                            }}
+                          >
+                            {cs.state === 'terminated'
+                              ? cs.exitCode === 0
+                                ? '(Completed)'
+                                : '(Failed)'
+                              : cs.ready
+                                ? '(Ready)'
+                                : '(Not Ready)'}
+                          </span>
+                        </div>
+                        {cs.restartCount > 0 && (
+                          <div style={{ color: '#ff9800', marginTop: '4px' }}>
+                            Restarts: {cs.restartCount}
+                          </div>
+                        )}
+                        {cs.reason && (
+                          <div
+                            style={{
+                              marginTop: '4px',
+                              color: ERROR_REASONS.includes(cs.reason) ? '#c62828' : '#333',
+                              fontWeight: ERROR_REASONS.includes(cs.reason) ? 500 : 'normal',
+                            }}
+                          >
+                            Reason: {cs.reason}
+                          </div>
+                        )}
+                        {cs.message && (
+                          <div
+                            style={{
+                              color: '#666',
+                              fontSize: '12px',
+                              marginTop: '4px',
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {cs.message}
+                          </div>
+                        )}
+                        {cs.exitCode !== undefined && (
+                          <div
+                            style={{
+                              color: cs.exitCode !== 0 ? '#f44336' : '#4caf50',
+                              marginTop: '4px',
+                              fontWeight: cs.exitCode !== 0 ? 500 : 'normal',
+                            }}
+                          >
+                            Exit Code: {cs.exitCode}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                </div>
+              )}
+          </div>
+        ) : (
+          <div style={{ color: '#666', fontStyle: 'italic' }}>
+            Pod status not available. The pod may have been deleted.
+          </div>
+        )}
+      </div>
+
+      {/* Pod Lifecycle Timeline */}
+      {stateHistory.length > 0 && (
+        <div style={{ marginBottom: '24px' }}>
+          <h3 style={{ marginBottom: '12px', fontSize: '16px', fontWeight: 500 }}>
+            Pod Lifecycle ({stateHistory.length} state changes)
+          </h3>
+          <div style={{ position: 'relative', paddingLeft: '24px' }}>
+            {/* Vertical timeline line */}
+            <div
+              style={{
+                position: 'absolute',
+                left: '7px',
+                top: '4px',
+                bottom: '4px',
+                width: '2px',
+                backgroundColor: '#e0e0e0',
+              }}
+            />
+            {stateHistory.map((snapshot, idx) => {
+              const isLast = idx === stateHistory.length - 1;
+              const containerSummary = getContainerSummary(snapshot);
+              return (
+                <div key={idx} style={{ position: 'relative', marginBottom: isLast ? 0 : '16px' }}>
+                  {/* Timeline dot */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: '-20px',
+                      top: '3px',
+                      width: '12px',
+                      height: '12px',
+                      borderRadius: '50%',
+                      backgroundColor: snapshot.isError ? '#f44336' : getPhaseColor(snapshot.phase),
+                      border: '2px solid #fff',
+                      boxShadow:
+                        '0 0 0 1px ' +
+                        (snapshot.isError ? '#f44336' : getPhaseColor(snapshot.phase)),
+                    }}
+                  />
+                  <div
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '4px',
+                      backgroundColor: snapshot.isError
+                        ? '#ffebee'
+                        : isLast
+                          ? getPhaseBackgroundColor(snapshot.phase)
+                          : '#fafafa',
+                      border: `1px solid ${snapshot.isError ? '#ef9a9a' : '#e0e0e0'}`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontWeight: 500,
+                          color: snapshot.isError ? '#c62828' : '#333',
+                          fontSize: '13px',
+                        }}
+                      >
+                        {getStateLabel(snapshot)}
+                      </span>
+                      <span style={{ color: '#999', fontSize: '11px' }}>
+                        {formatTime(snapshot.timestamp)}
+                      </span>
+                    </div>
+                    {snapshot.message && (
+                      <div
+                        style={{
+                          color: '#666',
+                          fontSize: '12px',
+                          marginTop: '4px',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {snapshot.message}
+                      </div>
+                    )}
+                    {containerSummary.length > 0 && (
+                      <div style={{ marginTop: '4px' }}>
+                        {containerSummary.map((cs, csIdx) => (
+                          <div key={csIdx} style={{ color: '#666', fontSize: '11px' }}>
+                            {cs}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Pod Events */}
+      <div>
+        <h3 style={{ marginBottom: '12px', fontSize: '16px', fontWeight: 500 }}>
+          Pod Events {podEvents.length > 0 && `(${podEvents.length})`}
+        </h3>
+        {podEvents.length > 0 ? (
+          <div style={{ border: '1px solid #e0e0e0', borderRadius: '4px', overflow: 'hidden' }}>
+            {podEvents.map((event, idx) => (
+              <div
+                key={idx}
+                style={{
+                  padding: '12px 16px',
+                  borderBottom: idx < podEvents.length - 1 ? '1px solid #e0e0e0' : 'none',
+                  backgroundColor: event.type === 'Warning' ? '#fff3e0' : '#fff',
+                }}
+              >
+                <div
+                  style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}
+                >
+                  <span>
+                    <span
+                      style={{
+                        color: event.type === 'Warning' ? '#ff9800' : '#4caf50',
+                        fontWeight: 500,
+                        marginRight: '8px',
+                      }}
+                    >
+                      [{event.type}]
+                    </span>
+                    <strong>{event.reason}</strong>
+                    {event.count > 1 && (
+                      <span style={{ color: '#666', marginLeft: '8px' }}>(x{event.count})</span>
+                    )}
+                  </span>
+                  <span style={{ color: '#666', fontSize: '12px' }}>
+                    {event.lastTimestamp ? new Date(event.lastTimestamp).toLocaleString() : '-'}
+                  </span>
+                </div>
+                <div style={{ color: '#333', fontSize: '13px' }}>{event.message}</div>
+                {event.source && (
+                  <div style={{ color: '#999', fontSize: '11px', marginTop: '4px' }}>
+                    Source: {event.source}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ color: '#666', fontStyle: 'italic' }}>
+            No events available. Events may have expired or the pod may have been deleted.
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 async function getLogsInfo(
@@ -340,7 +836,7 @@ async function getLogsInfo(
       const linkedArtifacts = await getLinkedArtifactsByExecution(execution);
       const outputArtifacts = filterEventWithOutputArtifact(linkedArtifacts);
       const executorLogsArtifact = outputArtifacts.find(
-        artifact => getArtifactName(artifact) === 'executor-logs',
+        (artifact) => getArtifactName(artifact) === 'executor-logs',
       );
 
       if (executorLogsArtifact) {
@@ -377,11 +873,7 @@ interface ArtifactNodeDetailProps {
   namespace: string | undefined;
 }
 function ArtifactNodeDetail({ execution, linkedArtifact, namespace }: ArtifactNodeDetailProps) {
-  const { data } = useQuery<ArtifactType[], Error>(
-    ['artifact_types', { linkedArtifact }],
-    () => getArtifactTypes(),
-    {},
-  );
+  const { data } = useArtifactTypes();
 
   const [selectedTab, setSelectedTab] = useState(0);
   return (
@@ -389,7 +881,7 @@ function ArtifactNodeDetail({ execution, linkedArtifact, namespace }: ArtifactNo
       <MD2Tabs
         tabs={['Artifact Info', 'Visualization']}
         selectedTab={selectedTab}
-        onSwitch={tab => setSelectedTab(tab)}
+        onSwitch={(tab) => setSelectedTab(tab)}
       />
       <div className={padding(20)}>
         {/* Artifact Info tab */}
@@ -416,34 +908,22 @@ function ArtifactNodeDetail({ execution, linkedArtifact, namespace }: ArtifactNo
   );
 }
 
-interface ArtifactNodeDetailProps {
+interface ArtifactInfoProps {
   execution?: Execution;
   artifactTypes?: ArtifactType[];
   linkedArtifact?: LinkedArtifact;
   namespace: string | undefined;
 }
 
-function ArtifactInfo({
-  execution,
-  artifactTypes,
-  linkedArtifact,
-  namespace,
-}: ArtifactNodeDetailProps) {
+function ArtifactInfo({ execution, artifactTypes, linkedArtifact, namespace }: ArtifactInfoProps) {
   if (!execution || !linkedArtifact) {
     return NODE_STATE_UNAVAILABLE;
   }
 
   // Static Artifact information.
-  const taskName =
-    execution
-      .getCustomPropertiesMap()
-      .get('display_name')
-      ?.getStringValue() || '-';
+  const taskName = execution.getCustomPropertiesMap().get('display_name')?.getStringValue() || '-';
   const artifactName =
-    linkedArtifact.artifact
-      .getCustomPropertiesMap()
-      .get('display_name')
-      ?.getStringValue() || '-';
+    linkedArtifact.artifact.getCustomPropertiesMap().get('display_name')?.getStringValue() || '-';
   let artifactTypeName = artifactTypes
     ? getArtifactTypeName(artifactTypes, [linkedArtifact])
     : ['-'];
@@ -492,7 +972,7 @@ function ArtifactInfo({
 }
 
 interface SubDAGNodeDetailProps {
-  element: FlowElement<FlowElementDataBase>;
+  element: PipelineFlowElement;
   execution?: Execution;
   layers: string[];
   onLayerChange: (layers: string[]) => void;
@@ -529,7 +1009,7 @@ function SubDAGNodeDetail({
         <MD2Tabs
           tabs={['Input/Output', 'Task Details']}
           selectedTab={selectedTab}
-          onSwitch={tab => setSelectedTab(tab)}
+          onSwitch={(tab) => setSelectedTab(tab)}
         />
         <div className={commonCss.page}>
           {/* Input/Output tab */}
@@ -537,7 +1017,10 @@ function SubDAGNodeDetail({
             (() => {
               if (execution) {
                 return (
-                  <InputOutputTab execution={execution} namespace={namespace}></InputOutputTab>
+                  <RuntimeInputOutputTab
+                    execution={execution}
+                    namespace={namespace}
+                  ></RuntimeInputOutputTab>
                 );
               }
               return NODE_STATE_UNAVAILABLE;

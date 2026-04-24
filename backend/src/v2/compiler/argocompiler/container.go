@@ -91,6 +91,7 @@ type containerDriverInputs struct {
 	component        string
 	task             string
 	taskName         string // preserve the original task name for input resolving
+	taskPath         string // full task path including parent DAG names (e.g., "root.for-loop-1.process-item")
 	container        string
 	parentDagID      string
 	iterationIndex   string // optional, when this is an iteration task
@@ -174,6 +175,12 @@ func (c *workflowCompiler) containerDriverTask(name string, inputs containerDriv
 			wfapi.Parameter{Name: paramKubernetesConfig, Value: wfapi.AnyStringPtr(inputs.kubernetesConfig)},
 		)
 	}
+	if inputs.taskPath != "" {
+		dagTask.Arguments.Parameters = append(
+			dagTask.Arguments.Parameters,
+			wfapi.Parameter{Name: paramTaskPath, Value: wfapi.AnyStringPtr(inputs.taskPath)},
+		)
+	}
 	outputs := &containerDriverOutputs{
 		podSpecPatch: taskOutputParameter(name, paramPodSpecPatch),
 		cached:       taskOutputParameter(name, paramCachedDecision),
@@ -236,15 +243,35 @@ func (c *workflowCompiler) addContainerDriverTemplate() string {
 	if value, ok := os.LookupEnv(PublishLogsEnvVar); ok {
 		args = append(args, "--publish_logs", value)
 	}
+	if c.defaultRunAsUser != nil {
+		args = append(args, "--default_run_as_user", strconv.FormatInt(*c.defaultRunAsUser, 10))
+	}
+	if c.defaultRunAsGroup != nil {
+		args = append(args, "--default_run_as_group", strconv.FormatInt(*c.defaultRunAsGroup, 10))
+	}
+	if c.defaultRunAsNonRoot != nil {
+		args = append(args, "--default_run_as_non_root", strconv.FormatBool(*c.defaultRunAsNonRoot))
+	}
 
 	template := &wfapi.Template{
 		Name: name,
+		Metadata: wfapi.Metadata{
+			Labels: map[string]string{
+				// Simple task name for backward compatibility (max 63 chars for K8s labels)
+				"pipelines.kubeflow.org/task_name": inputParameter(paramTaskName),
+			},
+			Annotations: map[string]string{
+				// Full task path for sub-DAG differentiation (no length limit)
+				"pipelines.kubeflow.org/task_path": inputParameter(paramTaskPath),
+			},
+		},
 		Inputs: wfapi.Inputs{
 			Parameters: []wfapi.Parameter{
 				{Name: paramComponent},
 				{Name: paramTask},
 				{Name: paramContainer},
 				{Name: paramTaskName},
+				{Name: paramTaskPath, Default: wfapi.AnyStringPtr("")},
 				{Name: paramParentDagID},
 				{Name: paramIterationIndex, Default: wfapi.AnyStringPtr("-1")},
 				{Name: paramKubernetesConfig, Default: wfapi.AnyStringPtr("")},
@@ -286,6 +313,10 @@ type containerExecutorInputs struct {
 	exitTemplate string
 	// this will be provided as the parent-dag-id input to the Argo Workflow exit lifecycle hook.
 	hookParentDagID string
+	// taskName is the simple task name for pod labeling (max 63 chars for K8s labels)
+	taskName string
+	// taskPath is the full task path for sub-DAG differentiation (no length limit for annotations)
+	taskPath string
 }
 
 // containerExecutorTask returns an argo workflows DAGTask.
@@ -327,6 +358,14 @@ func (c *workflowCompiler) containerExecutorTask(name string, inputs containerEx
 						Name:    paramCachedDecision,
 						Value:   wfapi.AnyStringPtr(inputs.cachedDecision),
 						Default: wfapi.AnyStringPtr("false"),
+					},
+					{
+						Name:  paramTaskName,
+						Value: wfapi.AnyStringPtr(inputs.taskName),
+					},
+					{
+						Name:  paramTaskPath,
+						Value: wfapi.AnyStringPtr(inputs.taskPath),
 					},
 				},
 				append(
@@ -389,6 +428,14 @@ func (c *workflowCompiler) addContainerExecutorTemplate(task *pipelinespec.Pipel
 						Name:    paramCachedDecision,
 						Default: wfapi.AnyStringPtr("false"),
 					},
+					{
+						Name:    paramTaskName,
+						Default: wfapi.AnyStringPtr(""),
+					},
+					{
+						Name:    paramTaskPath,
+						Default: wfapi.AnyStringPtr(""),
+					},
 				},
 				append(
 					c.getPodMetadataParameters(k8sExecCfg.GetPodMetadata(), false),
@@ -404,6 +451,14 @@ func (c *workflowCompiler) addContainerExecutorTemplate(task *pipelinespec.Pipel
 							{
 								Name:  paramPodSpecPatch,
 								Value: wfapi.AnyStringPtr(inputParameter(paramPodSpecPatch)),
+							},
+							{
+								Name:  paramTaskName,
+								Value: wfapi.AnyStringPtr(inputParameter(paramTaskName)),
+							},
+							{
+								Name:  paramTaskPath,
+								Value: wfapi.AnyStringPtr(inputParameter(paramTaskPath)),
 							},
 						},
 						append(
@@ -435,11 +490,29 @@ func (c *workflowCompiler) addContainerExecutorTemplate(task *pipelinespec.Pipel
 	}
 	executor := &wfapi.Template{
 		Name: nameContainerImpl,
+		Metadata: wfapi.Metadata{
+			Labels: map[string]string{
+				// Simple task name for backward compatibility (max 63 chars for K8s labels)
+				"pipelines.kubeflow.org/task_name": inputParameter(paramTaskName),
+			},
+			Annotations: map[string]string{
+				// Full task path for sub-DAG differentiation (no length limit)
+				"pipelines.kubeflow.org/task_path": inputParameter(paramTaskPath),
+			},
+		},
 		Inputs: wfapi.Inputs{
 			Parameters: append(
 				[]wfapi.Parameter{
 					{
 						Name: paramPodSpecPatch,
+					},
+					{
+						Name:    paramTaskName,
+						Default: wfapi.AnyStringPtr(""),
+					},
+					{
+						Name:    paramTaskPath,
+						Default: wfapi.AnyStringPtr(""),
 					},
 				},
 				append(
@@ -556,14 +629,19 @@ func (c *workflowCompiler) addContainerExecutorTemplate(task *pipelinespec.Pipel
 	if common.GetCaBundleSecretName() != "" || common.GetCaBundleConfigMapName() != "" {
 		ConfigureCustomCABundle(executor)
 	}
-	applySecurityContextToExecutorTemplate(executor)
+	applySecurityContextToExecutorTemplate(executor, c.defaultRunAsUser, c.defaultRunAsGroup, c.defaultRunAsNonRoot)
 
-	// If retry policy is set, add retryStrategy to executor
+	// If retry policy is set, add retryStrategy to executor and inject
+	// KFP_RETRY_INDEX so the launcher can resolve the per-attempt log path
+	// without a Kubernetes API call. {{retries}} is only valid inside a
+	// template that has a retryStrategy; adding it elsewhere resolves to an
+	// empty string, which forces an unnecessary pod-annotation lookup.
 	if taskRetrySpec != nil {
 		executor.RetryStrategy = c.getTaskRetryStrategyFromInput(inputParameter(paramRetryMaxCount),
 			inputParameter(paramRetryBackOffDuration),
 			inputParameter(paramRetryBackOffFactor),
 			inputParameter(paramRetryBackOffMaxDuration))
+		executor.Container.Env = append(executor.Container.Env, retryIndexEnv)
 	}
 	// Update pod metadata if it defined in the Kubernetes Spec
 	if k8sExecCfg.GetPodMetadata() != nil {

@@ -1,7 +1,6 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  creationTimestamp: null
   generateName: nb-simple-
 spec:
   arguments:
@@ -125,6 +124,10 @@ spec:
       pipelines.kubeflow.org/v2_component: "true"
     labels:
       pipelines.kubeflow.org/v2_component: "true"
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   serviceAccountName: pipeline-runner
   templates:
   - container:
@@ -193,18 +196,32 @@ spec:
         requests:
           cpu: 100m
           memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
     inputs:
       parameters:
       - name: component
       - name: task
       - name: container
       - name: task-name
+      - default: ""
+        name: task-path
       - name: parent-dag-id
       - default: "-1"
         name: iteration-index
       - default: ""
         name: kubernetes-config
-    metadata: {}
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-container-driver
     outputs:
       parameters:
@@ -221,12 +238,20 @@ spec:
         valueFrom:
           default: "true"
           path: /tmp/outputs/condition
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   - dag:
       tasks:
       - arguments:
           parameters:
           - name: pod-spec-patch
             value: '{{inputs.parameters.pod-spec-patch}}'
+          - name: task-name
+            value: '{{inputs.parameters.task-name}}'
+          - name: task-path
+            value: '{{inputs.parameters.task-path}}'
         name: executor
         template: system-container-impl
         when: '{{inputs.parameters.cached-decision}} != true'
@@ -235,6 +260,10 @@ spec:
       - name: pod-spec-patch
       - default: "false"
         name: cached-decision
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
     metadata: {}
     name: system-container-executor
     outputs: {}
@@ -257,6 +286,13 @@ spec:
       image: gcr.io/ml-pipeline/should-be-overridden-during-runtime
       name: ""
       resources: {}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
@@ -283,19 +319,38 @@ spec:
       resources:
         limits:
           cpu: 500m
-          memory: 128Mi
+          memory: 256Mi
         requests:
           cpu: 100m
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
     inputs:
       parameters:
       - name: pod-spec-patch
-    metadata: {}
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-container-impl
     outputs: {}
     podSpecPatch: '{{inputs.parameters.pod-spec-patch}}'
+    securityContext:
+      seccompProfile:
+        type: RuntimeDefault
     volumes:
     - emptyDir: {}
       name: kfp-launcher
@@ -325,6 +380,8 @@ spec:
             value: run-train-notebook
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: run-train-notebook
         name: run-train-notebook-driver
         template: system-container-driver
       - arguments:
@@ -334,6 +391,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.run-train-notebook-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: run-train-notebook
+          - name: task-path
+            value: run-train-notebook
         depends: run-train-notebook-driver.Succeeded
         name: run-train-notebook
         template: system-container-executor
@@ -398,6 +459,14 @@ spec:
         requests:
           cpu: 100m
           memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
     inputs:
       parameters:
       - name: component
@@ -407,13 +476,19 @@ spec:
         name: task
       - default: ""
         name: task-name
+      - default: ""
+        name: task-path
       - default: "0"
         name: parent-dag-id
       - default: "-1"
         name: iteration-index
       - default: DAG
         name: driver-type
-    metadata: {}
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-dag-driver
     outputs:
       parameters:
@@ -428,6 +503,10 @@ spec:
         valueFrom:
           default: "true"
           path: /tmp/outputs/condition
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   - dag:
       tasks:
       - arguments:

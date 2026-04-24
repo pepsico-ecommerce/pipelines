@@ -1,7 +1,6 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  creationTimestamp: null
   generateName: pipeline-with-pod-metadata-
 spec:
   arguments:
@@ -71,6 +70,10 @@ spec:
       pipelines.kubeflow.org/v2_component: "true"
     labels:
       pipelines.kubeflow.org/v2_component: "true"
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   serviceAccountName: pipeline-runner
   templates:
   - container:
@@ -139,18 +142,32 @@ spec:
         requests:
           cpu: 100m
           memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
     inputs:
       parameters:
       - name: component
       - name: task
       - name: container
       - name: task-name
+      - default: ""
+        name: task-path
       - name: parent-dag-id
       - default: "-1"
         name: iteration-index
       - default: ""
         name: kubernetes-config
-    metadata: {}
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-container-driver
     outputs:
       parameters:
@@ -167,12 +184,20 @@ spec:
         valueFrom:
           default: "true"
           path: /tmp/outputs/condition
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   - dag:
       tasks:
       - arguments:
           parameters:
           - name: pod-spec-patch
             value: '{{inputs.parameters.pod-spec-patch}}'
+          - name: task-name
+            value: '{{inputs.parameters.task-name}}'
+          - name: task-path
+            value: '{{inputs.parameters.task-path}}'
         name: executor
         template: system-container-impl
         when: '{{inputs.parameters.cached-decision}} != true'
@@ -181,6 +206,10 @@ spec:
       - name: pod-spec-patch
       - default: "false"
         name: cached-decision
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
     metadata: {}
     name: system-container-executor
     outputs: {}
@@ -203,6 +232,13 @@ spec:
       image: gcr.io/ml-pipeline/should-be-overridden-during-runtime
       name: ""
       resources: {}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
@@ -229,19 +265,38 @@ spec:
       resources:
         limits:
           cpu: 500m
-          memory: 128Mi
+          memory: 256Mi
         requests:
           cpu: 100m
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
     inputs:
       parameters:
       - name: pod-spec-patch
-    metadata: {}
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-container-impl
     outputs: {}
     podSpecPatch: '{{inputs.parameters.pod-spec-patch}}'
+    securityContext:
+      seccompProfile:
+        type: RuntimeDefault
     volumes:
     - emptyDir: {}
       name: kfp-launcher
@@ -263,6 +318,10 @@ spec:
           parameters:
           - name: pod-spec-patch
             value: '{{inputs.parameters.pod-spec-patch}}'
+          - name: task-name
+            value: '{{inputs.parameters.task-name}}'
+          - name: task-path
+            value: '{{inputs.parameters.task-path}}'
           - name: pod-metadata-annotation-key
             value: '{{inputs.parameters.pod-metadata-annotation-key}}'
           - name: pod-metadata-annotation-val
@@ -283,6 +342,10 @@ spec:
       - name: pod-spec-patch
       - default: "false"
         name: cached-decision
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
       - name: pod-metadata-annotation-key
       - name: pod-metadata-annotation-val
       - name: pod-metadata-label-key-1
@@ -311,6 +374,13 @@ spec:
       image: gcr.io/ml-pipeline/should-be-overridden-during-runtime
       name: ""
       resources: {}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
@@ -337,15 +407,27 @@ spec:
       resources:
         limits:
           cpu: 500m
-          memory: 128Mi
+          memory: 256Mi
         requests:
           cpu: 100m
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
     inputs:
       parameters:
       - name: pod-spec-patch
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
       - name: pod-metadata-annotation-key
       - name: pod-metadata-annotation-val
       - name: pod-metadata-label-key-1
@@ -355,12 +437,17 @@ spec:
     metadata:
       annotations:
         '{{inputs.parameters.pod-metadata-annotation-key}}': '{{inputs.parameters.pod-metadata-annotation-val}}'
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
       labels:
         '{{inputs.parameters.pod-metadata-label-key-1}}': '{{inputs.parameters.pod-metadata-label-val-1}}'
         '{{inputs.parameters.pod-metadata-label-key-2}}': '{{inputs.parameters.pod-metadata-label-val-2}}'
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: metadata-1-2-system-container-impl
     outputs: {}
     podSpecPatch: '{{inputs.parameters.pod-spec-patch}}'
+    securityContext:
+      seccompProfile:
+        type: RuntimeDefault
     volumes:
     - emptyDir: {}
       name: kfp-launcher
@@ -382,6 +469,10 @@ spec:
           parameters:
           - name: pod-spec-patch
             value: '{{inputs.parameters.pod-spec-patch}}'
+          - name: task-name
+            value: '{{inputs.parameters.task-name}}'
+          - name: task-path
+            value: '{{inputs.parameters.task-path}}'
           - name: pod-metadata-annotation-key-1
             value: '{{inputs.parameters.pod-metadata-annotation-key-1}}'
           - name: pod-metadata-annotation-val-1
@@ -398,6 +489,10 @@ spec:
       - name: pod-spec-patch
       - default: "false"
         name: cached-decision
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
       - name: pod-metadata-annotation-key-1
       - name: pod-metadata-annotation-val-1
       - name: pod-metadata-annotation-key-2
@@ -424,6 +519,13 @@ spec:
       image: gcr.io/ml-pipeline/should-be-overridden-during-runtime
       name: ""
       resources: {}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
@@ -450,15 +552,27 @@ spec:
       resources:
         limits:
           cpu: 500m
-          memory: 128Mi
+          memory: 256Mi
         requests:
           cpu: 100m
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
     inputs:
       parameters:
       - name: pod-spec-patch
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
       - name: pod-metadata-annotation-key-1
       - name: pod-metadata-annotation-val-1
       - name: pod-metadata-annotation-key-2
@@ -467,9 +581,15 @@ spec:
       annotations:
         '{{inputs.parameters.pod-metadata-annotation-key-1}}': '{{inputs.parameters.pod-metadata-annotation-val-1}}'
         '{{inputs.parameters.pod-metadata-annotation-key-2}}': '{{inputs.parameters.pod-metadata-annotation-val-2}}'
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: metadata-2-0-system-container-impl
     outputs: {}
     podSpecPatch: '{{inputs.parameters.pod-spec-patch}}'
+    securityContext:
+      seccompProfile:
+        type: RuntimeDefault
     volumes:
     - emptyDir: {}
       name: kfp-launcher
@@ -499,6 +619,8 @@ spec:
             value: validate-no-pod-metadata
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: validate-no-pod-metadata
         name: validate-no-pod-metadata-driver
         template: system-container-driver
       - arguments:
@@ -508,6 +630,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.validate-no-pod-metadata-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: validate-no-pod-metadata
+          - name: task-path
+            value: validate-no-pod-metadata
         depends: validate-no-pod-metadata-driver.Succeeded
         name: validate-no-pod-metadata
         template: system-container-executor
@@ -525,6 +651,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: kubernetes-config
             value: '{{workflow.parameters.kubernetes-comp-validate-pod-metadata}}'
+          - name: task-path
+            value: validate-pod-metadata
         name: validate-pod-metadata-driver
         template: system-container-driver
       - arguments:
@@ -534,6 +662,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.validate-pod-metadata-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: validate-pod-metadata
+          - name: task-path
+            value: validate-pod-metadata
           - name: pod-metadata-annotation-key
             value: task-annotation
           - name: pod-metadata-annotation-val
@@ -563,6 +695,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: kubernetes-config
             value: '{{workflow.parameters.kubernetes-comp-validate-pod-metadata-2}}'
+          - name: task-path
+            value: validate-pod-metadata-2
         name: validate-pod-metadata-2-driver
         template: system-container-driver
       - arguments:
@@ -572,6 +706,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.validate-pod-metadata-2-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: validate-pod-metadata-2
+          - name: task-path
+            value: validate-pod-metadata-2
           - name: pod-metadata-annotation-key-1
             value: task-annotation-1
           - name: pod-metadata-annotation-val-1
@@ -644,6 +782,14 @@ spec:
         requests:
           cpu: 100m
           memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
     inputs:
       parameters:
       - name: component
@@ -653,13 +799,19 @@ spec:
         name: task
       - default: ""
         name: task-name
+      - default: ""
+        name: task-path
       - default: "0"
         name: parent-dag-id
       - default: "-1"
         name: iteration-index
       - default: DAG
         name: driver-type
-    metadata: {}
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-dag-driver
     outputs:
       parameters:
@@ -674,6 +826,10 @@ spec:
         valueFrom:
           default: "true"
           path: /tmp/outputs/condition
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   - dag:
       tasks:
       - arguments:

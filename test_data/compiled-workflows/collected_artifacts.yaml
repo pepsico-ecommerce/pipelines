@@ -1,7 +1,6 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  creationTimestamp: null
   generateName: collected-artifact-pipeline-
 spec:
   arguments:
@@ -138,6 +137,10 @@ spec:
       pipelines.kubeflow.org/v2_component: "true"
     labels:
       pipelines.kubeflow.org/v2_component: "true"
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   serviceAccountName: pipeline-runner
   templates:
   - container:
@@ -206,18 +209,32 @@ spec:
         requests:
           cpu: 100m
           memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
     inputs:
       parameters:
       - name: component
       - name: task
       - name: container
       - name: task-name
+      - default: ""
+        name: task-path
       - name: parent-dag-id
       - default: "-1"
         name: iteration-index
       - default: ""
         name: kubernetes-config
-    metadata: {}
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-container-driver
     outputs:
       parameters:
@@ -234,12 +251,20 @@ spec:
         valueFrom:
           default: "true"
           path: /tmp/outputs/condition
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   - dag:
       tasks:
       - arguments:
           parameters:
           - name: pod-spec-patch
             value: '{{inputs.parameters.pod-spec-patch}}'
+          - name: task-name
+            value: '{{inputs.parameters.task-name}}'
+          - name: task-path
+            value: '{{inputs.parameters.task-path}}'
         name: executor
         template: system-container-impl
         when: '{{inputs.parameters.cached-decision}} != true'
@@ -248,6 +273,10 @@ spec:
       - name: pod-spec-patch
       - default: "false"
         name: cached-decision
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
     metadata: {}
     name: system-container-executor
     outputs: {}
@@ -270,6 +299,13 @@ spec:
       image: gcr.io/ml-pipeline/should-be-overridden-during-runtime
       name: ""
       resources: {}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
@@ -296,19 +332,38 @@ spec:
       resources:
         limits:
           cpu: 500m
-          memory: 128Mi
+          memory: 256Mi
         requests:
           cpu: 100m
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
     inputs:
       parameters:
       - name: pod-spec-patch
-    metadata: {}
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-container-impl
     outputs: {}
     podSpecPatch: '{{inputs.parameters.pod-spec-patch}}'
+    securityContext:
+      seccompProfile:
+        type: RuntimeDefault
     volumes:
     - emptyDir: {}
       name: kfp-launcher
@@ -338,6 +393,8 @@ spec:
             value: create-dataset
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-single-node-dag.create-dataset
         name: create-dataset-driver
         template: system-container-driver
       - arguments:
@@ -347,6 +404,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.create-dataset-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: create-dataset
+          - name: task-path
+            value: root.comp-single-node-dag.create-dataset
         depends: create-dataset-driver.Succeeded
         name: create-dataset
         template: system-container-executor
@@ -411,6 +472,14 @@ spec:
         requests:
           cpu: 100m
           memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
     inputs:
       parameters:
       - name: component
@@ -420,13 +489,19 @@ spec:
         name: task
       - default: ""
         name: task-name
+      - default: ""
+        name: task-path
       - default: "0"
         name: parent-dag-id
       - default: "-1"
         name: iteration-index
       - default: DAG
         name: driver-type
-    metadata: {}
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-dag-driver
     outputs:
       parameters:
@@ -441,6 +516,10 @@ spec:
         valueFrom:
           default: "true"
           path: /tmp/outputs/condition
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   - dag:
       tasks:
       - arguments:
@@ -455,6 +534,8 @@ spec:
             value: read-single-dataset-generate-model
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-2.read-single-dataset-generate-model
         depends: single-node-dag.Succeeded
         name: read-single-dataset-generate-model-driver
         template: system-container-driver
@@ -465,6 +546,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.read-single-dataset-generate-model-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: read-single-dataset-generate-model
+          - name: task-path
+            value: root.comp-for-loop-2.read-single-dataset-generate-model
         depends: read-single-dataset-generate-model-driver.Succeeded
         name: read-single-dataset-generate-model
         template: system-container-executor
@@ -478,6 +563,8 @@ spec:
             value: '{"cachingOptions":{},"componentRef":{"name":"comp-single-node-dag"},"inputs":{"parameters":{"char":{"componentInputParameter":"pipelinechannel--split-chars-Output-loop-item"}}},"taskInfo":{"name":"single-node-dag"}}'
           - name: task-name
             value: single-node-dag
+          - name: task-path
+            value: root.comp-for-loop-2.single-node-dag
         name: single-node-dag-driver
         template: system-dag-driver
       - arguments:
@@ -507,6 +594,10 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-2"},"inputs":{"parameters":{"pipelinechannel--split-chars-Output":{"componentInputParameter":"pipelinechannel--split-chars-Output"},"pipelinechannel--split-ids-Output-loop-item":{"componentInputParameter":"pipelinechannel--split-ids-Output-loop-item"}}},"parameterIterator":{"itemInput":"pipelinechannel--split-chars-Output-loop-item","items":{"inputParameter":"pipelinechannel--split-chars-Output"}},"taskInfo":{"name":"for-loop-2"}}'
+          - name: task-name
+            value: for-loop-2
+          - name: task-path
+            value: root.comp-for-loop-1.for-loop-2.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -535,6 +626,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-2"},"inputs":{"parameters":{"pipelinechannel--split-chars-Output":{"componentInputParameter":"pipelinechannel--split-chars-Output"},"pipelinechannel--split-ids-Output-loop-item":{"componentInputParameter":"pipelinechannel--split-ids-Output-loop-item"}}},"parameterIterator":{"itemInput":"pipelinechannel--split-chars-Output-loop-item","items":{"inputParameter":"pipelinechannel--split-chars-Output"}},"taskInfo":{"name":"for-loop-2"}}'
+          - name: task-name
+            value: for-loop-2
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -568,6 +661,8 @@ spec:
             value: create-file
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-1.create-file
         name: create-file-driver
         template: system-container-driver
       - arguments:
@@ -577,6 +672,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.create-file-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: create-file
+          - name: task-path
+            value: root.comp-for-loop-1.create-file
         depends: create-file-driver.Succeeded
         name: create-file
         template: system-container-executor
@@ -598,6 +697,8 @@ spec:
             value: read-datasets
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-1.read-datasets
         depends: for-loop-2.Succeeded
         name: read-datasets-driver
         template: system-container-driver
@@ -608,6 +709,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.read-datasets-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: read-datasets
+          - name: task-path
+            value: root.comp-for-loop-1.read-datasets
         depends: read-datasets-driver.Succeeded
         name: read-datasets
         template: system-container-executor
@@ -623,6 +728,8 @@ spec:
             value: read-models
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-1.read-models
         depends: for-loop-2.Succeeded
         name: read-models-driver
         template: system-container-driver
@@ -633,6 +740,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.read-models-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: read-models
+          - name: task-path
+            value: root.comp-for-loop-1.read-models
         depends: read-models-driver.Succeeded
         name: read-models
         template: system-container-executor
@@ -648,6 +759,8 @@ spec:
             value: read-single-file
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-1.read-single-file
         depends: create-file.Succeeded
         name: read-single-file-driver
         template: system-container-driver
@@ -658,6 +771,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.read-single-file-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: read-single-file
+          - name: task-path
+            value: root.comp-for-loop-1.read-single-file
         depends: read-single-file-driver.Succeeded
         name: read-single-file
         template: system-container-executor
@@ -679,6 +796,10 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-1"},"dependentTasks":["split-chars","split-ids"],"inputs":{"parameters":{"pipelinechannel--split-chars-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"split-chars"}},"pipelinechannel--split-ids-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"split-ids"}}}},"parameterIterator":{"itemInput":"pipelinechannel--split-ids-Output-loop-item","items":{"inputParameter":"pipelinechannel--split-ids-Output"}},"taskInfo":{"name":"for-loop-1"}}'
+          - name: task-name
+            value: for-loop-1
+          - name: task-path
+            value: root.comp-collecting-artifacts.for-loop-1.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -707,6 +828,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-1"},"dependentTasks":["split-chars","split-ids"],"inputs":{"parameters":{"pipelinechannel--split-chars-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"split-chars"}},"pipelinechannel--split-ids-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"split-ids"}}}},"parameterIterator":{"itemInput":"pipelinechannel--split-ids-Output-loop-item","items":{"inputParameter":"pipelinechannel--split-ids-Output"}},"taskInfo":{"name":"for-loop-1"}}'
+          - name: task-name
+            value: for-loop-1
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -747,6 +870,8 @@ spec:
             value: split-chars
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-collecting-artifacts.split-chars
         name: split-chars-driver
         template: system-container-driver
       - arguments:
@@ -756,6 +881,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.split-chars-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: split-chars
+          - name: task-path
+            value: root.comp-collecting-artifacts.split-chars
         depends: split-chars-driver.Succeeded
         name: split-chars
         template: system-container-executor
@@ -771,6 +900,8 @@ spec:
             value: split-ids
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-collecting-artifacts.split-ids
         name: split-ids-driver
         template: system-container-driver
       - arguments:
@@ -780,6 +911,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.split-ids-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: split-ids
+          - name: task-path
+            value: root.comp-collecting-artifacts.split-ids
         depends: split-ids-driver.Succeeded
         name: split-ids
         template: system-container-executor
@@ -800,6 +935,8 @@ spec:
           - name: task
             value: '{"cachingOptions":{},"componentRef":{"name":"comp-collecting-artifacts"},"inputs":{"parameters":{"model_chars":{"runtimeValue":{"constant":"x,y,z"}},"model_ids":{"runtimeValue":{"constant":"s1,s2,s3"}}}},"taskInfo":{"name":"collecting-artifacts"}}'
           - name: task-name
+            value: collecting-artifacts
+          - name: task-path
             value: collecting-artifacts
         name: collecting-artifacts-driver
         template: system-dag-driver
@@ -824,6 +961,8 @@ spec:
             value: read-models
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: read-models
         depends: collecting-artifacts.Succeeded
         name: read-models-driver
         template: system-container-driver
@@ -834,6 +973,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.read-models-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: read-models
+          - name: task-path
+            value: read-models
         depends: read-models-driver.Succeeded
         name: read-models
         template: system-container-executor

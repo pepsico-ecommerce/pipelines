@@ -1,7 +1,6 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  creationTimestamp: null
   generateName: pipeline-with-loops-
 spec:
   arguments:
@@ -125,6 +124,10 @@ spec:
       pipelines.kubeflow.org/v2_component: "true"
     labels:
       pipelines.kubeflow.org/v2_component: "true"
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
   serviceAccountName: pipeline-runner
   templates:
   - container:
@@ -193,18 +196,32 @@ spec:
         requests:
           cpu: 100m
           memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
     inputs:
       parameters:
       - name: component
       - name: task
       - name: container
       - name: task-name
+      - default: ""
+        name: task-path
       - name: parent-dag-id
       - default: "-1"
         name: iteration-index
       - default: ""
         name: kubernetes-config
-    metadata: {}
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-container-driver
     outputs:
       parameters:
@@ -221,12 +238,20 @@ spec:
         valueFrom:
           default: "true"
           path: /tmp/outputs/condition
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   - dag:
       tasks:
       - arguments:
           parameters:
           - name: pod-spec-patch
             value: '{{inputs.parameters.pod-spec-patch}}'
+          - name: task-name
+            value: '{{inputs.parameters.task-name}}'
+          - name: task-path
+            value: '{{inputs.parameters.task-path}}'
         name: executor
         template: system-container-impl
         when: '{{inputs.parameters.cached-decision}} != true'
@@ -235,6 +260,10 @@ spec:
       - name: pod-spec-patch
       - default: "false"
         name: cached-decision
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
     metadata: {}
     name: system-container-executor
     outputs: {}
@@ -257,6 +286,13 @@ spec:
       image: gcr.io/ml-pipeline/should-be-overridden-during-runtime
       name: ""
       resources: {}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
@@ -283,19 +319,38 @@ spec:
       resources:
         limits:
           cpu: 500m
-          memory: 128Mi
+          memory: 256Mi
         requests:
           cpu: 100m
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       volumeMounts:
       - mountPath: /kfp-launcher
         name: kfp-launcher
     inputs:
       parameters:
       - name: pod-spec-patch
-    metadata: {}
+      - default: ""
+        name: task-name
+      - default: ""
+        name: task-path
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-container-impl
     outputs: {}
     podSpecPatch: '{{inputs.parameters.pod-spec-patch}}'
+    securityContext:
+      seccompProfile:
+        type: RuntimeDefault
     volumes:
     - emptyDir: {}
       name: kfp-launcher
@@ -325,6 +380,8 @@ spec:
             value: print-text-2
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-2.print-text-2
         name: print-text-2-driver
         template: system-container-driver
       - arguments:
@@ -334,6 +391,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-text-2-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-text-2
+          - name: task-path
+            value: root.comp-for-loop-2.print-text-2
         depends: print-text-2-driver.Succeeded
         name: print-text-2
         template: system-container-executor
@@ -398,6 +459,14 @@ spec:
         requests:
           cpu: 100m
           memory: 64Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
     inputs:
       parameters:
       - name: component
@@ -407,13 +476,19 @@ spec:
         name: task
       - default: ""
         name: task-name
+      - default: ""
+        name: task-path
       - default: "0"
         name: parent-dag-id
       - default: "-1"
         name: iteration-index
       - default: DAG
         name: driver-type
-    metadata: {}
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/task_path: '{{inputs.parameters.task-path}}'
+      labels:
+        pipelines.kubeflow.org/task_name: '{{inputs.parameters.task-name}}'
     name: system-dag-driver
     outputs:
       parameters:
@@ -428,6 +503,10 @@ spec:
         valueFrom:
           default: "true"
           path: /tmp/outputs/condition
+    securityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
   - dag:
       tasks:
       - arguments:
@@ -440,6 +519,10 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-2"},"inputs":{"parameters":{"pipelinechannel--loop_parameter":{"componentInputParameter":"pipelinechannel--loop_parameter"}}},"parameterIterator":{"itemInput":"pipelinechannel--loop_parameter-loop-item","items":{"inputParameter":"pipelinechannel--loop_parameter"}},"taskInfo":{"name":"for-loop-2"}}'
+          - name: task-name
+            value: for-loop-2
+          - name: task-path
+            value: root.comp-for-loop-1.for-loop-2.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -468,6 +551,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-2"},"inputs":{"parameters":{"pipelinechannel--loop_parameter":{"componentInputParameter":"pipelinechannel--loop_parameter"}}},"parameterIterator":{"itemInput":"pipelinechannel--loop_parameter-loop-item","items":{"inputParameter":"pipelinechannel--loop_parameter"}},"taskInfo":{"name":"for-loop-2"}}'
+          - name: task-name
+            value: for-loop-2
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -507,6 +592,8 @@ spec:
             value: print-text
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-1.print-text
         name: print-text-driver
         template: system-container-driver
       - arguments:
@@ -516,6 +603,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-text-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-text
+          - name: task-path
+            value: root.comp-for-loop-1.print-text
         depends: print-text-driver.Succeeded
         name: print-text
         template: system-container-executor
@@ -539,6 +630,8 @@ spec:
             value: print-int-3
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-10.print-int-3
         name: print-int-3-driver
         template: system-container-driver
       - arguments:
@@ -548,6 +641,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-int-3-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-int-3
+          - name: task-path
+            value: root.comp-for-loop-10.print-int-3
         depends: print-int-3-driver.Succeeded
         name: print-int-3
         template: system-container-executor
@@ -571,6 +668,8 @@ spec:
             value: print-int-4
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-11.print-int-4
         name: print-int-4-driver
         template: system-container-driver
       - arguments:
@@ -580,6 +679,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-int-4-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-int-4
+          - name: task-path
+            value: root.comp-for-loop-11.print-int-4
         depends: print-int-4-driver.Succeeded
         name: print-int-4
         template: system-container-executor
@@ -603,6 +706,8 @@ spec:
             value: print-int-5
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-12.print-int-5
         name: print-int-5-driver
         template: system-container-driver
       - arguments:
@@ -612,6 +717,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-int-5-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-int-5
+          - name: task-path
+            value: root.comp-for-loop-12.print-int-5
         depends: print-int-5-driver.Succeeded
         name: print-int-5
         template: system-container-executor
@@ -635,6 +744,8 @@ spec:
             value: print-int-6
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-13.print-int-6
         name: print-int-6-driver
         template: system-container-driver
       - arguments:
@@ -644,6 +755,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-int-6-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-int-6
+          - name: task-path
+            value: root.comp-for-loop-13.print-int-6
         depends: print-int-6-driver.Succeeded
         name: print-int-6
         template: system-container-executor
@@ -667,6 +782,8 @@ spec:
             value: print-text-5
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-6.print-text-5
         name: print-text-5-driver
         template: system-container-driver
       - arguments:
@@ -676,6 +793,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-text-5-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-text-5
+          - name: task-path
+            value: root.comp-for-loop-6.print-text-5
         depends: print-text-5-driver.Succeeded
         name: print-text-5
         template: system-container-executor
@@ -691,6 +812,8 @@ spec:
             value: print-text-6
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-6.print-text-6
         name: print-text-6-driver
         template: system-container-driver
       - arguments:
@@ -700,6 +823,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-text-6-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-text-6
+          - name: task-path
+            value: root.comp-for-loop-6.print-text-6
         depends: print-text-6-driver.Succeeded
         name: print-text-6
         template: system-container-executor
@@ -722,6 +849,10 @@ spec:
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-6"},"iteratorPolicy":{"parallelismLimit":1},"parameterIterator":{"itemInput":"pipelinechannel--loop-item-param-5","items":{"raw":"[{\"A_a\":
               \"10\", \"B_b\": \"20\"}, {\"A_a\": \"100\", \"B_b\": \"200\"}]"}},"taskInfo":{"name":"for-loop-6"}}'
+          - name: task-name
+            value: for-loop-6
+          - name: task-path
+            value: root.comp-for-loop-4.for-loop-6.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -751,6 +882,8 @@ spec:
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-6"},"iteratorPolicy":{"parallelismLimit":1},"parameterIterator":{"itemInput":"pipelinechannel--loop-item-param-5","items":{"raw":"[{\"A_a\":
               \"10\", \"B_b\": \"20\"}, {\"A_a\": \"100\", \"B_b\": \"200\"}]"}},"taskInfo":{"name":"for-loop-6"}}'
+          - name: task-name
+            value: for-loop-6
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -791,6 +924,8 @@ spec:
             value: print-text-3
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-4.print-text-3
         name: print-text-3-driver
         template: system-container-driver
       - arguments:
@@ -800,6 +935,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-text-3-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-text-3
+          - name: task-path
+            value: root.comp-for-loop-4.print-text-3
         depends: print-text-3-driver.Succeeded
         name: print-text-3
         template: system-container-executor
@@ -815,6 +954,8 @@ spec:
             value: print-text-4
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-4.print-text-4
         name: print-text-4-driver
         template: system-container-driver
       - arguments:
@@ -824,6 +965,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-text-4-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-text-4
+          - name: task-path
+            value: root.comp-for-loop-4.print-text-4
         depends: print-text-4-driver.Succeeded
         name: print-text-4
         template: system-container-executor
@@ -847,6 +992,8 @@ spec:
             value: print-int
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-8.print-int
         name: print-int-driver
         template: system-container-driver
       - arguments:
@@ -856,6 +1003,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-int-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-int
+          - name: task-path
+            value: root.comp-for-loop-8.print-int
         depends: print-int-driver.Succeeded
         name: print-int
         template: system-container-executor
@@ -879,6 +1030,8 @@ spec:
             value: print-int-2
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: root.comp-for-loop-9.print-int-2
         name: print-int-2-driver
         template: system-container-driver
       - arguments:
@@ -888,6 +1041,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.print-int-2-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: print-int-2
+          - name: task-path
+            value: root.comp-for-loop-9.print-int-2
         depends: print-int-2-driver.Succeeded
         name: print-int-2
         template: system-container-executor
@@ -909,6 +1066,10 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-1"},"inputs":{"parameters":{"pipelinechannel--loop_parameter":{"componentInputParameter":"loop_parameter"}}},"iteratorPolicy":{"parallelismLimit":2},"parameterIterator":{"itemInput":"pipelinechannel--loop_parameter-loop-item","items":{"inputParameter":"pipelinechannel--loop_parameter"}},"taskInfo":{"name":"for-loop-1"}}'
+          - name: task-name
+            value: for-loop-1
+          - name: task-path
+            value: root.for-loop-1.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -937,6 +1098,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-1"},"inputs":{"parameters":{"pipelinechannel--loop_parameter":{"componentInputParameter":"loop_parameter"}}},"iteratorPolicy":{"parallelismLimit":2},"parameterIterator":{"itemInput":"pipelinechannel--loop_parameter-loop-item","items":{"inputParameter":"pipelinechannel--loop_parameter"}},"taskInfo":{"name":"for-loop-1"}}'
+          - name: task-name
+            value: for-loop-1
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -969,6 +1132,10 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-10"},"dependentTasks":["list-dict-maker-1"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-1-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-1"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-1-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-1-Output"}},"taskInfo":{"name":"for-loop-10"}}'
+          - name: task-name
+            value: for-loop-10
+          - name: task-path
+            value: root.for-loop-10.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -997,6 +1164,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-10"},"dependentTasks":["list-dict-maker-1"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-1-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-1"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-1-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-1-Output"}},"taskInfo":{"name":"for-loop-10"}}'
+          - name: task-name
+            value: for-loop-10
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -1028,6 +1197,10 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-11"},"dependentTasks":["list-dict-maker-2"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-2-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-2"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-2-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-2-Output"}},"taskInfo":{"name":"for-loop-11"}}'
+          - name: task-name
+            value: for-loop-11
+          - name: task-path
+            value: root.for-loop-11.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -1056,6 +1229,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-11"},"dependentTasks":["list-dict-maker-2"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-2-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-2"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-2-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-2-Output"}},"taskInfo":{"name":"for-loop-11"}}'
+          - name: task-name
+            value: for-loop-11
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -1087,6 +1262,10 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-12"},"dependentTasks":["list-dict-maker-3"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-3-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-3"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-3-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-3-Output"}},"taskInfo":{"name":"for-loop-12"}}'
+          - name: task-name
+            value: for-loop-12
+          - name: task-path
+            value: root.for-loop-12.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -1115,6 +1294,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-12"},"dependentTasks":["list-dict-maker-3"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-3-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-3"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-3-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-3-Output"}},"taskInfo":{"name":"for-loop-12"}}'
+          - name: task-name
+            value: for-loop-12
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -1146,6 +1327,10 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-13"},"dependentTasks":["list-dict-maker-1-2"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-1-2-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-1-2"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-1-2-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-1-2-Output"}},"taskInfo":{"name":"for-loop-13"}}'
+          - name: task-name
+            value: for-loop-13
+          - name: task-path
+            value: root.for-loop-13.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -1174,6 +1359,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-13"},"dependentTasks":["list-dict-maker-1-2"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-1-2-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-1-2"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-1-2-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-1-2-Output"}},"taskInfo":{"name":"for-loop-13"}}'
+          - name: task-name
+            value: for-loop-13
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -1206,6 +1393,10 @@ spec:
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-4"},"parameterIterator":{"itemInput":"pipelinechannel--loop-item-param-3","items":{"raw":"[{\"A_a\":
               \"1\", \"B_b\": \"2\"}, {\"A_a\": \"10\", \"B_b\": \"20\"}]"}},"taskInfo":{"name":"for-loop-4"}}'
+          - name: task-name
+            value: for-loop-4
+          - name: task-path
+            value: root.for-loop-4.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -1235,6 +1426,8 @@ spec:
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-4"},"parameterIterator":{"itemInput":"pipelinechannel--loop-item-param-3","items":{"raw":"[{\"A_a\":
               \"1\", \"B_b\": \"2\"}, {\"A_a\": \"10\", \"B_b\": \"20\"}]"}},"taskInfo":{"name":"for-loop-4"}}'
+          - name: task-name
+            value: for-loop-4
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -1267,6 +1460,10 @@ spec:
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-8"},"iteratorPolicy":{"parallelismLimit":1},"parameterIterator":{"itemInput":"pipelinechannel--loop-item-param-7","items":{"raw":"[{\"a\":
               1, \"b\": 2}, {\"a\": 2, \"b\": 3}, {\"a\": 3, \"b\": 4}]"}},"taskInfo":{"name":"for-loop-8"}}'
+          - name: task-name
+            value: for-loop-8
+          - name: task-path
+            value: root.for-loop-8.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -1296,6 +1493,8 @@ spec:
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-8"},"iteratorPolicy":{"parallelismLimit":1},"parameterIterator":{"itemInput":"pipelinechannel--loop-item-param-7","items":{"raw":"[{\"a\":
               1, \"b\": 2}, {\"a\": 2, \"b\": 3}, {\"a\": 3, \"b\": 4}]"}},"taskInfo":{"name":"for-loop-8"}}'
+          - name: task-name
+            value: for-loop-8
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -1328,6 +1527,10 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-9"},"dependentTasks":["list-dict-maker-0"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-0-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-0"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-0-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-0-Output"}},"taskInfo":{"name":"for-loop-9"}}'
+          - name: task-name
+            value: for-loop-9
+          - name: task-path
+            value: root.for-loop-9.iteration-item
         name: iteration-item-driver
         template: system-dag-driver
       - arguments:
@@ -1356,6 +1559,8 @@ spec:
             value: '{{inputs.parameters.parent-dag-id}}'
           - name: task
             value: '{"componentRef":{"name":"comp-for-loop-9"},"dependentTasks":["list-dict-maker-0"],"inputs":{"parameters":{"pipelinechannel--list-dict-maker-0-Output":{"taskOutputParameter":{"outputParameterKey":"Output","producerTask":"list-dict-maker-0"}}}},"parameterIterator":{"itemInput":"pipelinechannel--list-dict-maker-0-Output-loop-item","items":{"inputParameter":"pipelinechannel--list-dict-maker-0-Output"}},"taskInfo":{"name":"for-loop-9"}}'
+          - name: task-name
+            value: for-loop-9
         name: iteration-driver
         template: system-dag-driver
       - arguments:
@@ -1442,6 +1647,8 @@ spec:
             value: list-dict-maker-0
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: list-dict-maker-0
         name: list-dict-maker-0-driver
         template: system-container-driver
       - arguments:
@@ -1451,6 +1658,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.list-dict-maker-0-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: list-dict-maker-0
+          - name: task-path
+            value: list-dict-maker-0
         depends: list-dict-maker-0-driver.Succeeded
         name: list-dict-maker-0
         template: system-container-executor
@@ -1466,6 +1677,8 @@ spec:
             value: list-dict-maker-1
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: list-dict-maker-1
         name: list-dict-maker-1-driver
         template: system-container-driver
       - arguments:
@@ -1475,6 +1688,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.list-dict-maker-1-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: list-dict-maker-1
+          - name: task-path
+            value: list-dict-maker-1
         depends: list-dict-maker-1-driver.Succeeded
         name: list-dict-maker-1
         template: system-container-executor
@@ -1490,6 +1707,8 @@ spec:
             value: list-dict-maker-1-2
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: list-dict-maker-1-2
         name: list-dict-maker-1-2-driver
         template: system-container-driver
       - arguments:
@@ -1499,6 +1718,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.list-dict-maker-1-2-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: list-dict-maker-1-2
+          - name: task-path
+            value: list-dict-maker-1-2
         depends: list-dict-maker-1-2-driver.Succeeded
         name: list-dict-maker-1-2
         template: system-container-executor
@@ -1514,6 +1737,8 @@ spec:
             value: list-dict-maker-2
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: list-dict-maker-2
         name: list-dict-maker-2-driver
         template: system-container-driver
       - arguments:
@@ -1523,6 +1748,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.list-dict-maker-2-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: list-dict-maker-2
+          - name: task-path
+            value: list-dict-maker-2
         depends: list-dict-maker-2-driver.Succeeded
         name: list-dict-maker-2
         template: system-container-executor
@@ -1538,6 +1767,8 @@ spec:
             value: list-dict-maker-3
           - name: parent-dag-id
             value: '{{inputs.parameters.parent-dag-id}}'
+          - name: task-path
+            value: list-dict-maker-3
         name: list-dict-maker-3-driver
         template: system-container-driver
       - arguments:
@@ -1547,6 +1778,10 @@ spec:
           - default: "false"
             name: cached-decision
             value: '{{tasks.list-dict-maker-3-driver.outputs.parameters.cached-decision}}'
+          - name: task-name
+            value: list-dict-maker-3
+          - name: task-path
+            value: list-dict-maker-3
         depends: list-dict-maker-3-driver.Succeeded
         name: list-dict-maker-3
         template: system-container-executor
